@@ -1,5 +1,4 @@
 import SessionMessagingKit
-import SessionProtocolKit
 import SessionSnodeKit
 
 extension OWSPrimaryStorage : OWSPrimaryStorageProtocol { }

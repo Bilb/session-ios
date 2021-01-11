@@ -23,12 +23,12 @@ final class EditClosedGroupVC : BaseVC, UITableViewDataSource, UITableViewDelega
     }()
 
     private lazy var addMembersButton: Button = {
-            let result = Button(style: .prominentOutline, size: .large)
-            result.setTitle("Add Members", for: UIControl.State.normal)
-            result.addTarget(self, action: #selector(addMembers), for: UIControl.Event.touchUpInside)
-            result.contentEdgeInsets = UIEdgeInsets(top: 0, leading: Values.mediumSpacing, bottom: 0, trailing: Values.mediumSpacing)
-            return result
-        }()
+        let result = Button(style: .prominentOutline, size: .large)
+        result.setTitle("Add Members", for: UIControl.State.normal)
+        result.addTarget(self, action: #selector(addMembers), for: UIControl.Event.touchUpInside)
+        result.contentEdgeInsets = UIEdgeInsets(top: 0, leading: Values.mediumSpacing, bottom: 0, trailing: Values.mediumSpacing)
+        return result
+    }()
 
     @objc private lazy var tableView: UITableView = {
         let result = UITableView()
@@ -141,13 +141,14 @@ final class EditClosedGroupVC : BaseVC, UITableViewDataSource, UITableViewDelega
         let cell = tableView.dequeueReusableCell(withIdentifier: "UserCell") as! UserCell
         let publicKey = members[indexPath.row]
         cell.publicKey = publicKey
+        cell.accessory = !canBeRemoved(publicKey) ? .lock : .none
         cell.update()
         return cell
     }
 
     func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
         let publicKey = members[indexPath.row]
-        return publicKey != getUserHexEncodedPublicKey()
+        return canBeRemoved(publicKey)
     }
 
     func tableView(_ tableView: UITableView, editActionsForRowAt indexPath: IndexPath) -> [UITableViewRowAction]? {
@@ -251,19 +252,27 @@ final class EditClosedGroupVC : BaseVC, UITableViewDataSource, UITableViewDelega
         guard members != Set(thread.groupModel.groupMemberIds) || name != thread.groupModel.groupName else {
             return popToConversationVC(self)
         }
-        ModalActivityIndicatorViewController.present(fromViewController: navigationController!, canCancel: false) { [weak self] _ in
-            Storage.writeSync { [weak self] transaction in
-                MessageSender.update(groupPublicKey, with: members, name: name, transaction: transaction).done(on: DispatchQueue.main) {
-                    guard let self = self else { return }
-                    self.dismiss(animated: true, completion: nil) // Dismiss the loader
-                    popToConversationVC(self)
-                }.catch(on: DispatchQueue.main) { error in
-                    guard let self = self else { return }
-                    self.dismiss(animated: true, completion: nil) // Dismiss the loader
-                    self.showError(title: "Couldn't Update Group", message: "Please check your internet connection and try again.")
-                }
+        if !members.contains(getUserHexEncodedPublicKey()) {
+            guard Set(thread.groupModel.groupMemberIds).subtracting([ getUserHexEncodedPublicKey() ]) == members else {
+                return showError(title: "Couldn't Update Group", message: "Can't leave while adding or removing other members.")
             }
         }
+        Storage.write(with: { [weak self] transaction in
+            do {
+                if !members.contains(getUserHexEncodedPublicKey()) {
+                    try MessageSender.leaveV2(groupPublicKey, using: transaction)
+                } else {
+                    try MessageSender.updateV2(groupPublicKey, with: members, name: name, transaction: transaction)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.showError(title: "Couldn't Update Group", message: "Please check your internet connection and try again.")
+                }
+            }
+        }, completion: { [weak self] in
+            guard let self = self else { return }
+            popToConversationVC(self)
+        })
     }
 
     // MARK: Convenience
@@ -271,5 +280,17 @@ final class EditClosedGroupVC : BaseVC, UITableViewDataSource, UITableViewDelega
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: ""), style: .default, handler: nil))
         presentAlert(alert)
+    }
+    
+    private func canBeRemoved(_ publicKey: String) -> Bool {
+        return !isAdmin(publicKey) || isCurrentUser(publicKey)
+    }
+    
+    private func isAdmin(_ publicKey: String) -> Bool {
+        return thread.groupModel.groupAdminIds.contains(publicKey)
+    }
+    
+    private func isCurrentUser(_ publicKey: String) -> Bool {
+        return publicKey == getUserHexEncodedPublicKey()
     }
 }

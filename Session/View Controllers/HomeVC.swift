@@ -167,15 +167,10 @@ final class HomeVC : BaseVC, UITableViewDataSource, UITableViewDelegate, UIScrol
     
     private func showKeyPairMigrationNudgeIfNeeded() {
         guard !KeyPairUtilities.hasV2KeyPair() else { return }
-        let lastNudge = UserDefaults.standard[.lastKeyPairMigrationNudge]
-        let nudgeInterval: Double = 3 * 24 * 60 * 60 // 3 days
-        let nudge = given(lastNudge) { Date().timeIntervalSince($0) > nudgeInterval } ?? true
-        guard nudge else { return }
         let sheet = KeyPairMigrationSheet()
         sheet.modalPresentationStyle = .overFullScreen
         sheet.modalTransitionStyle = .crossDissolve
         present(sheet, animated: true, completion: nil)
-        UserDefaults.standard[.lastKeyPairMigrationNudge] = Date()
     }
     
     private func showKeyPairMigrationSuccessModalIfNeeded() {
@@ -402,7 +397,11 @@ final class HomeVC : BaseVC, UITableViewDataSource, UITableViewDelegate, UIScrol
         guard let thread = self.thread(at: indexPath.row) else { return [] }
         let openGroup = Storage.shared.getOpenGroup(for: thread.uniqueId!)
         let delete = UITableViewRowAction(style: .destructive, title: NSLocalizedString("TXT_DELETE_TITLE", comment: "")) { [weak self] _, _ in
-            let alert = UIAlertController(title: NSLocalizedString("CONVERSATION_DELETE_CONFIRMATION_ALERT_TITLE", comment: ""), message: NSLocalizedString("CONVERSATION_DELETE_CONFIRMATION_ALERT_MESSAGE", comment: ""), preferredStyle: .alert)
+            var message = NSLocalizedString("CONVERSATION_DELETE_CONFIRMATION_ALERT_MESSAGE", comment: "")
+            if let thread = thread as? TSGroupThread, thread.isClosedGroup, thread.groupModel.groupAdminIds.contains(getUserHexEncodedPublicKey()) {
+                message = "Because you are the creator of this group it will be deleted for everyone. This cannot be undone."
+            }
+            let alert = UIAlertController(title: NSLocalizedString("CONVERSATION_DELETE_CONFIRMATION_ALERT_TITLE", comment: ""), message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: NSLocalizedString("TXT_DELETE_TITLE", comment: ""), style: .destructive) { _ in
                 Storage.write { transaction in
                     Storage.shared.cancelPendingMessageSendJobs(for: thread.uniqueId!, using: transaction)
@@ -417,14 +416,17 @@ final class HomeVC : BaseVC, UITableViewDataSource, UITableViewDelegate, UIScrol
                         let _ = OpenGroupAPI.leave(openGroup.channel, on: openGroup.server)
                         thread.removeAllThreadInteractions(with: transaction)
                         thread.remove(with: transaction)
-                    } else if let thread = thread as? TSGroupThread, thread.usesSharedSenderKeys == true {
+                    } else if let thread = thread as? TSGroupThread, thread.isClosedGroup == true {
                         let groupID = thread.groupModel.groupId
                         let groupPublicKey = LKGroupUtilities.getDecodedGroupID(groupID)
-                        let _ = MessageSender.leave(groupPublicKey, using: transaction).ensure {
-                            Storage.write { transaction in
-                                thread.removeAllThreadInteractions(with: transaction)
-                                thread.remove(with: transaction)
-                            }
+                        do {
+                            try MessageSender.leaveV2(groupPublicKey, using: transaction)
+                        } catch {
+                            // TODO: Handle
+                        }
+                        Storage.write { transaction in
+                            thread.removeAllThreadInteractions(with: transaction)
+                            thread.remove(with: transaction)
                         }
                     } else {
                         thread.removeAllThreadInteractions(with: transaction)

@@ -11,7 +11,7 @@ public class Message : NSObject, NSCoding { // NSObject/NSCoding conformance is 
     public var groupPublicKey: String?
     public var openGroupServerMessageID: UInt64?
 
-    public class var ttl: UInt64 { 2 * 24 * 60 * 60 * 1000 }
+    public var ttl: UInt64 { 2 * 24 * 60 * 60 * 1000 }
 
     public override init() { }
 
@@ -49,7 +49,7 @@ public class Message : NSObject, NSCoding { // NSObject/NSCoding conformance is 
     }
 
     public func setGroupContextIfNeeded(on dataMessage: SNProtoDataMessage.SNProtoDataMessageBuilder, using transaction: YapDatabaseReadTransaction) throws {
-        guard let thread = TSThread.fetch(uniqueId: threadID!, transaction: transaction) as? TSGroupThread, thread.usesSharedSenderKeys else { return }
+        guard let thread = TSThread.fetch(uniqueId: threadID!, transaction: transaction) as? TSGroupThread, thread.isClosedGroup else { return }
         // Android needs a group context or it'll interpret the message as a one-to-one message
         let groupProto = SNProtoGroupContext.builder(id: thread.groupModel.groupId, type: .deliver)
         dataMessage.setGroup(try groupProto.build())
