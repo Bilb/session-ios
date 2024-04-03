@@ -8,7 +8,8 @@ local version_info = {
     'git --version',
     'pod --version',
     'xcodebuild -version'
-  ]
+  ],
+  depends_on: ['clone'],
 };
 
 // Intentionally doing a depth of 2 as libSession-util has it's own submodules (and libLokinet likely will as well)
@@ -30,7 +31,7 @@ local machine_info = {
 };
 
 // Cocoapods
-// 
+//
 // Unfortunately Cocoapods has a dumb restriction which requires you to use UTF-8 for the
 // 'LANG' env var so we need to work around the with https://github.com/CocoaPods/CocoaPods/issues/6333
 local install_cocoapods = {
@@ -69,6 +70,25 @@ local load_cocoapods_cache = {
   depends_on: [
     'Clone Submodules'
   ]
+};
+
+
+// Load from the cached CocoaPods directory (to speed up the build)
+local clone = {
+  name: 'Clone',
+  commands: [
+    // 'echo $DEPLOY_KEY',
+    'mkdir -p $HOME/.ssh/',
+    'touch $HOME/.ssh/known_hosts',
+    'chmod 600 $HOME/.ssh/known_hosts',
+    'ssh-keyscan github.com > $HOME/.ssh/known_hosts',
+    'echo "$deploy_key" > $HOME/.ssh/id_ed25519_drone_ci_deploy',
+    'ssh -T git@github.com -i $HOME/.ssh/id_ed25519_drone_ci_deploy',
+    'git clone git@github.com:Bilb/session-ios.git --depth=1',
+    'git checkout $DRONE_COMMIT',
+  ],
+  environment: {  DEPLOY_KEY: { from_secret: 'DEPLOY_KEY' }  },
+
 };
 
 // Override the cached CocoaPods directory (to speed up the next build)
@@ -201,10 +221,12 @@ local update_cocoapods_cache(depends_on) = {
   {
     kind: 'pipeline',
     type: 'exec',
+
     name: 'Simulator Build',
     platform: { os: 'darwin', arch: 'amd64' },
     trigger: { event: { exclude: [ 'pull_request' ] } },
     steps: [
+      clone,
       version_info,
       clone_submodules,
       load_cocoapods_cache,
@@ -222,7 +244,7 @@ local update_cocoapods_cache(depends_on) = {
       update_cocoapods_cache(['Build']),
       {
         name: 'Upload artifacts',
-        environment: { SSH_KEY: { from_secret: 'SSH_KEY' } },
+        environment: { SSH_KEY: { from_secret: 'SSH_KEY' }, DEPLOY_KEY: { from_secret: 'DEPLOY_KEY' }  },
         commands: [
           './Scripts/drone-static-upload.sh'
         ],
